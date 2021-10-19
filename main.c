@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include "vlk_window.h"
+
+#define VK_USE_PLATFORM_XLIB_KHR
 #define VOLK_IMPLEMENTATION
 #include <volk.h>
 
@@ -22,10 +25,10 @@ static VkInstance create_instance() {
     createInfo.pApplicationInfo = &appInfo;
 #ifdef _DEBUG
     const char* debug_layers[] = { "VK_LAYER_KHRONOS_validation" };
-    createInfo.enabledLayerCount = 1;
+    createInfo.enabledLayerCount = sizeof(debug_layers) / sizeof(debug_layers[0]);
     createInfo.ppEnabledLayerNames = debug_layers;
-    const char *debug_extensions[] = { VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
-    createInfo.enabledExtensionCount = 1;
+    const char *debug_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
+    createInfo.enabledExtensionCount = sizeof(debug_extensions) / sizeof(debug_extensions[0]);
     createInfo.ppEnabledExtensionNames = debug_extensions;
 #else // _DEBUG
     createInfo.enabledLayerCount = 0;
@@ -102,17 +105,65 @@ static VkPhysicalDevice pick_physical_device(VkInstance instance) {
     return device;
 }
 
-static VkDevice create_logical_device(VkPhysicalDevice physical_device) {
+static VkSurfaceKHR create_surface(VkInstance instance) {
+    VkXlibSurfaceCreateInfoKHR createInfo = { 0 };
+    createInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+    createInfo.pNext = NULL;
+    createInfo.flags = 0;
+    createInfo.dpy = window_get_dpy();
+    createInfo.window = window_get_window();
+
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if(vkCreateXlibSurfaceKHR(instance, &createInfo, NULL, &surface) != VK_SUCCESS) {
+        fprintf(stderr, "Failed to create Vulkan Xlib surface.");
+        exit(1);
+    }
+    return surface;
+}
+
+static VkBool32 supports_swapchain(VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t index) {
+    VkBool32 present_support = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(physical_device, index, surface, &present_support);
+    return present_support;
+}
+
+static uint32_t get_graphics_queue_index(VkPhysicalDevice physical_device, VkSurfaceKHR surface) {
+    uint32_t queueCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queueCount, NULL);
+	assert(queueCount);
+	VkQueueFamilyProperties* properties = malloc(sizeof(VkQueueFamilyProperties) * queueCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queueCount, properties);
+	for (uint32_t i = 0; i < queueCount; i++)
+	{
+		if (properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT && supports_swapchain(physical_device, surface, i))
+		{
+			free(properties);
+			return i;
+		}
+	}
+	free(properties);
+	return UINT32_MAX;
+}
+
+static VkDevice create_logical_device(VkPhysicalDevice physical_device, uint32_t graphics_queue_index) {
+    const float queue_priorities[] = { 1.0f };
+    VkDeviceQueueCreateInfo queueCreateInfo = { 0 };
+    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	queueCreateInfo.queueFamilyIndex = graphics_queue_index;
+	queueCreateInfo.queueCount = 1;
+	queueCreateInfo.pQueuePriorities = queue_priorities;
+
     VkDeviceCreateInfo createInfo = { 0 };
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.pNext = NULL;
     createInfo.flags = 0;
-    createInfo.queueCreateInfoCount = 0;
-    createInfo.pQueueCreateInfos = NULL;
+    createInfo.queueCreateInfoCount = 1;
+    createInfo.pQueueCreateInfos = &queueCreateInfo;
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
-    createInfo.enabledExtensionCount = 0;
-    createInfo.ppEnabledExtensionNames = NULL;
+    const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+	createInfo.enabledExtensionCount = sizeof(deviceExtensions) / sizeof(deviceExtensions[0]);
+	createInfo.ppEnabledExtensionNames = deviceExtensions;
     createInfo.pEnabledFeatures = NULL;
 
     VkDevice device = VK_NULL_HANDLE;
@@ -131,16 +182,23 @@ int main() {
     VkInstance instance = create_instance();
     volkLoadInstance(instance);
     VkPhysicalDevice physical_device = pick_physical_device(instance);
-    VkDevice device = create_logical_device(physical_device);
+    window_create();
+    VkSurfaceKHR surface = create_surface(instance);
+    uint32_t graphics_queue_index = get_graphics_queue_index(physical_device, surface);
+    VkDevice device = create_logical_device(physical_device, graphics_queue_index);
 #ifdef _DEBUG
     VkDebugReportCallbackEXT clb = register_debug_callback(instance);
 #endif // _DEBUG
+
+    window_run();
 
 #ifdef _DEBUG
     vkDestroyDebugReportCallbackEXT(instance, clb, NULL);
 #endif // _DEBUG
     vkDestroyDevice(device, NULL);
+    vkDestroySurfaceKHR(instance, surface, VK_NULL_HANDLE);
+    window_destroy();
     vkDestroyInstance(instance, NULL);
-
+    
     return 0;
 }
