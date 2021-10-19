@@ -27,14 +27,15 @@ static VkInstance create_instance() {
     const char* debug_layers[] = { "VK_LAYER_KHRONOS_validation" };
     createInfo.enabledLayerCount = sizeof(debug_layers) / sizeof(debug_layers[0]);
     createInfo.ppEnabledLayerNames = debug_layers;
-    const char *debug_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
-    createInfo.enabledExtensionCount = sizeof(debug_extensions) / sizeof(debug_extensions[0]);
-    createInfo.ppEnabledExtensionNames = debug_extensions;
+    const char *instance_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
+    createInfo.enabledExtensionCount = sizeof(instance_extensions) / sizeof(instance_extensions[0]);
+    createInfo.ppEnabledExtensionNames = instance_extensions;
 #else // _DEBUG
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
-    createInfo.enabledExtensionCount = 0;
-    createInfo.ppEnabledExtensionNames = NULL;
+    const char *instance_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME };
+    createInfo.enabledExtensionCount = sizeof(instance_extensions) / sizeof(instance_extensions[0]);
+    createInfo.ppEnabledExtensionNames = instance_extensions;
 #endif // _DEBUG
 
     VkInstance instance = VK_NULL_HANDLE;
