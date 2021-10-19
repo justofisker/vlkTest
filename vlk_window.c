@@ -48,6 +48,9 @@ void window_create() {
 }
 
 char window_run() {
+	Atom wmDeleteMessage = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+	XSetWMProtocols(dpy, win, &wmDeleteMessage, 1);
+
     XEvent event;		/* the XEvent declaration !!! */
 	KeySym key;		/* a dealie-bob to handle KeyPress Events */	
 	char text[255];		/* a char buffer for KeyPress Events */
@@ -68,6 +71,9 @@ char window_run() {
 		if (event.type==ButtonPress) {
 			printf("You pressed a button at (%i,%i)\n",
 				event.xbutton.x,event.xbutton.y);
+		}
+		if (event.type == ClientMessage && event.xclient.data.l[0] == wmDeleteMessage) {
+			break;
 		}
 	}
 	return 0;
