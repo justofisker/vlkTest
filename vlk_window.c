@@ -55,7 +55,7 @@ char window_run() {
 	KeySym key;		/* a dealie-bob to handle KeyPress Events */	
 	char text[255];		/* a char buffer for KeyPress Events */
 
-	while(1) {
+	while(XEventsQueued(dpy, 0)) {
 		XNextEvent(dpy, &event);
 	
 		if (event.type==Expose && event.xexpose.count==0) {
@@ -64,7 +64,7 @@ char window_run() {
 		if (event.type==KeyPress&&
 		    XLookupString(&event.xkey,text,255,&key,0)==1) {
 			if (text[0]=='q') {
-				break;
+				return 0;
 			}
 			printf("You pressed the %c key!\n",text[0]);
 		}
@@ -73,10 +73,10 @@ char window_run() {
 				event.xbutton.x,event.xbutton.y);
 		}
 		if (event.type == ClientMessage && event.xclient.data.l[0] == wmDeleteMessage) {
-			break;
+			return 0;
 		}
 	}
-	return 0;
+	return 1;
 }
 
 void window_destroy() {

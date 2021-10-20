@@ -1,3 +1,7 @@
+
+#define _XOPEN_SOURCE   600
+#define _POSIX_C_SOURCE 200112L
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -557,7 +561,9 @@ int main() {
     VkSwapchainKHR swapchain = swapchain_info.swapchain;
     GraphicPipelineInfo graphics_pipeline_info = create_graphics_pipeline(device, swapchain_info.extent, swapchain_info.render_pass);
 
-    window_run();
+    while(window_run()) {
+        usleep(0);
+    }
 
     vkDestroyPipeline(device, graphics_pipeline_info.graphics_pipeline, NULL);
     vkDestroyPipelineLayout(device, graphics_pipeline_info.pipeline_layout, NULL);
