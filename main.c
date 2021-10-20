@@ -1,4 +1,3 @@
-
 #define _XOPEN_SOURCE   600
 #define _POSIX_C_SOURCE 200112L
 #include <unistd.h>
@@ -334,13 +333,22 @@ static SwapchainInfo create_swapchain(VkDevice device, VkPhysicalDevice physical
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &color_attachment_ref;
 
+    VkSubpassDependency dependency = { 0 };
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
     VkRenderPassCreateInfo render_pass_info = { 0 };
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     render_pass_info.attachmentCount = 1;
     render_pass_info.pAttachments = &color_attachment;
     render_pass_info.subpassCount = 1;
     render_pass_info.pSubpasses = &subpass;
-
+    render_pass_info.dependencyCount = 1;
+    render_pass_info.pDependencies = &dependency;
 
     VkRenderPass render_pass;
     if(vkCreateRenderPass(device, &render_pass_info, NULL, &render_pass) != VK_SUCCESS) {
@@ -535,6 +543,73 @@ static GraphicPipelineInfo create_graphics_pipeline(VkDevice device, VkExtent2D 
     return (GraphicPipelineInfo){ graphics_pipeline, pipeline_layout };
 }
 
+static VkFramebuffer *create_framebuffers(VkDevice device, SwapchainInfo swapchain_info) {
+    VkFramebuffer *framebuffers = malloc(sizeof(VkFramebuffer) * swapchain_info.image_count);
+
+    for(uint32_t i = 0; i < swapchain_info.image_count; ++i) {
+        VkFramebufferCreateInfo createInfo = { 0 };
+        createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        createInfo.renderPass = swapchain_info.render_pass;
+        createInfo.attachmentCount = 1;
+        createInfo.pAttachments = &swapchain_info.image_views[i];
+        createInfo.width = swapchain_info.extent.width;
+        createInfo.height = swapchain_info.extent.height;
+        createInfo.layers = 1;
+
+        if(vkCreateFramebuffer(device, &createInfo, NULL, &framebuffers[i]) != VK_SUCCESS) {
+            fprintf(stderr, "Failed to create Vulkan framebuffer.\n");
+            exit(1);
+        }
+    }
+    
+    return framebuffers;
+}
+
+static VkCommandPool create_command_pool(VkDevice device, Queues queues) {
+    VkCommandPoolCreateInfo pool_info = { 0 };
+    pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_info.queueFamilyIndex = queues.graphics_queue;
+    pool_info.flags = 0;
+
+    VkCommandPool command_pool;
+    if(vkCreateCommandPool(device, &pool_info, NULL, &command_pool) != VK_SUCCESS) {
+        fprintf(stderr, "Failed to create Vulkan command pool.\n");
+        exit(1);
+    }
+
+    return command_pool;
+}
+
+static VkCommandBuffer *create_command_buffers(VkDevice device, VkCommandPool command_pool, uint32_t count) {
+    VkCommandBuffer *command_buffers = malloc(sizeof(VkCommandBuffer) * count);
+
+    VkCommandBufferAllocateInfo alloc_info = { 0 };
+    alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.commandPool = command_pool;
+    alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandBufferCount = count;
+
+    if(vkAllocateCommandBuffers(device, &alloc_info, command_buffers) != VK_SUCCESS) {
+        fprintf(stderr, "Failed to create Vulkan command buffers.\n");
+        exit(1);
+    }
+    
+    return command_buffers;
+}
+
+static VkSemaphore create_semaphore(VkDevice device) {
+    VkSemaphoreCreateInfo createInfo = { 0 };
+    createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkSemaphore semaphore;
+    if(vkCreateSemaphore(device, &createInfo, NULL, &semaphore) != VK_SUCCESS) {
+        fprintf(stderr, "Failed to create Vulkan semaphore.\n");
+        exit(1);
+    }
+
+    return semaphore;
+}
+
 int main() {
     if(volkInitialize() != VK_SUCCESS) {
         fprintf(stderr, "Failed to initialize volk.\n");
@@ -560,11 +635,96 @@ int main() {
     SwapchainInfo swapchain_info = create_swapchain(device, physical_device, surface, swapchain_format, present_mode, queue_indices, VK_NULL_HANDLE);
     VkSwapchainKHR swapchain = swapchain_info.swapchain;
     GraphicPipelineInfo graphics_pipeline_info = create_graphics_pipeline(device, swapchain_info.extent, swapchain_info.render_pass);
+    VkFramebuffer *framebuffers = create_framebuffers(device, swapchain_info);
+    VkCommandPool command_pool = create_command_pool(device, queue_indices);
+    VkCommandBuffer *command_buffers = create_command_buffers(device, command_pool, swapchain_info.image_count);
+    VkSemaphore image_avaliable_semaphore = create_semaphore(device);
+    VkSemaphore render_finsihed_semaphore = create_semaphore(device);
 
-    while(window_run()) {
-        usleep(0);
+    for(uint32_t i = 0; i < swapchain_info.image_count; ++i) {
+        VkCommandBufferBeginInfo begin_info = { 0 };
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = 0;
+        begin_info.pInheritanceInfo = NULL;
+
+        if(vkBeginCommandBuffer(command_buffers[i], &begin_info) != VK_SUCCESS) {
+            fprintf(stderr, "Failed to begin recording to Vulkan command buffer.\n");
+            exit(1);
+        }
+
+        VkRenderPassBeginInfo render_pass_info = { 0 };
+        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        render_pass_info.renderPass = swapchain_info.render_pass;
+        render_pass_info.framebuffer = framebuffers[i];
+        render_pass_info.renderArea.offset.x = 0;
+        render_pass_info.renderArea.offset.y = 0;
+        render_pass_info.renderArea.extent = swapchain_info.extent;
+
+        VkClearValue clear_color = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+        render_pass_info.clearValueCount = 1;
+        render_pass_info.pClearValues = &clear_color;
+
+        vkCmdBeginRenderPass(command_buffers[i], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_info.graphics_pipeline);
+
+        vkCmdDraw(command_buffers[i], 3, 1, 0, 0);
+
+        vkCmdEndRenderPass(command_buffers[i]);
+
+        if(vkEndCommandBuffer(command_buffers[i]) != VK_SUCCESS) {
+            fprintf(stderr, "Failed to record to Vulkan command buffer.\n");
+            exit(1);
+        }
     }
 
+    while(window_run()) {
+        uint32_t image_index;
+        vkAcquireNextImageKHR(device, swapchain_info.swapchain, UINT64_MAX, image_avaliable_semaphore, VK_NULL_HANDLE, &image_index);
+
+        VkSubmitInfo submit_info = { 0 };
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        
+        VkSemaphore wait_semaphore[] = { image_avaliable_semaphore };
+        VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores = wait_semaphore;
+        submit_info.pWaitDstStageMask = wait_stages;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffers[image_index];
+
+        VkSemaphore singal_semaphores[] = { render_finsihed_semaphore };
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores = singal_semaphores;
+
+        if(vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) { 
+            fprintf(stderr, "Failed to submit Vulkan queue.\n");
+            exit(1);
+        }
+
+        VkPresentInfoKHR present_info = { 0 };
+        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        present_info.waitSemaphoreCount = 1;
+        present_info.pWaitSemaphores = singal_semaphores;
+        present_info.swapchainCount = 1;
+        present_info.pSwapchains = &swapchain_info.swapchain;
+        present_info.pImageIndices = &image_index;
+        present_info.pResults = NULL;
+
+        vkQueuePresentKHR(present_queue, &present_info);
+
+        //usleep(0);
+    }
+    vkDeviceWaitIdle(device);
+
+    vkDestroySemaphore(device, render_finsihed_semaphore, NULL);
+    vkDestroySemaphore(device, image_avaliable_semaphore, NULL);
+    vkDestroyCommandPool(device, command_pool, NULL);
+    for (uint32_t i = 0; i < swapchain_info.image_count; ++i)
+        vkDestroyFramebuffer(device, framebuffers[i], NULL);
+    free(framebuffers);
     vkDestroyPipeline(device, graphics_pipeline_info.graphics_pipeline, NULL);
     vkDestroyPipelineLayout(device, graphics_pipeline_info.pipeline_layout, NULL);
     vkDestroyRenderPass(device, swapchain_info.render_pass, NULL);
