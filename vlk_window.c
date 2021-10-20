@@ -63,14 +63,14 @@ char window_run() {
 		}
 		if (event.type==KeyPress&&
 		    XLookupString(&event.xkey,text,255,&key,0)==1) {
-			if (text[0]=='q') {
+			if (text[0]==27) { // Escape key
 				return 0;
 			}
-			printf("You pressed the %c key!\n",text[0]);
+			//printf("You pressed the %d key!\n",text[0]);
 		}
 		if (event.type==ButtonPress) {
-			printf("You pressed a button at (%i,%i)\n",
-				event.xbutton.x,event.xbutton.y);
+			//printf("You pressed a button at (%i,%i)\n",
+			//	event.xbutton.x,event.xbutton.y);
 		}
 		if (event.type == ClientMessage && event.xclient.data.l[0] == wmDeleteMessage) {
 			return 0;
