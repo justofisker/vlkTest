@@ -1,17 +1,14 @@
-#define _XOPEN_SOURCE   600
-#define _POSIX_C_SOURCE 200112L
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 
-#include "vlk_window.h"
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
 
-#define VK_USE_PLATFORM_XLIB_KHR
 #define VOLK_IMPLEMENTATION
 #include <volk.h>
 
-static VkInstance create_instance() {
+static VkInstance create_instance(SDL_Window *window) {
     VkApplicationInfo appInfo = { 0 };
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pNext = NULL;
@@ -30,16 +27,20 @@ static VkInstance create_instance() {
     const char* debug_layers[] = { "VK_LAYER_KHRONOS_validation" };
     createInfo.enabledLayerCount = sizeof(debug_layers) / sizeof(debug_layers[0]);
     createInfo.ppEnabledLayerNames = debug_layers;
-    const char *instance_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
+    const char *instance_extensions[] = { NULL, NULL, VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
     createInfo.enabledExtensionCount = sizeof(instance_extensions) / sizeof(instance_extensions[0]);
     createInfo.ppEnabledExtensionNames = instance_extensions;
 #else // _DEBUG
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
-    const char *instance_extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_EXTENSION_NAME };
+    const char *instance_extensions[] = { NULL, NULL };
     createInfo.enabledExtensionCount = sizeof(instance_extensions) / sizeof(instance_extensions[0]);
     createInfo.ppEnabledExtensionNames = instance_extensions;
 #endif // _DEBUG
+    unsigned int count;
+    SDL_Vulkan_GetInstanceExtensions(window, &count, NULL);
+    assert(count == 2);
+    SDL_Vulkan_GetInstanceExtensions(window, &count, instance_extensions);
 
     VkInstance instance = VK_NULL_HANDLE;
     if(vkCreateInstance(&createInfo, NULL, &instance) != VK_SUCCESS) {
@@ -109,17 +110,10 @@ static VkPhysicalDevice pick_physical_device(VkInstance instance) {
     return device;
 }
 
-static VkSurfaceKHR create_surface(VkInstance instance) {
-    VkXlibSurfaceCreateInfoKHR createInfo = { 0 };
-    createInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-    createInfo.pNext = NULL;
-    createInfo.flags = 0;
-    createInfo.dpy = window_get_dpy();
-    createInfo.window = window_get_window();
-
+static VkSurfaceKHR create_surface(VkInstance instance, SDL_Window *window) {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    if(vkCreateXlibSurfaceKHR(instance, &createInfo, NULL, &surface) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to create Vulkan Xlib surface.");
+    if(!SDL_Vulkan_CreateSurface(window, instance, &surface)) {
+        fprintf(stderr, "Failed to create Vulkan surface.");
         exit(1);
     }
     return surface;
@@ -601,7 +595,7 @@ static VkSemaphore create_semaphore(VkDevice device) {
     VkSemaphoreCreateInfo createInfo = { 0 };
     createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-    VkSemaphore semaphore;
+    VkSemaphore semaphore = VK_NULL_HANDLE;
     if(vkCreateSemaphore(device, &createInfo, NULL, &semaphore) != VK_SUCCESS) {
         fprintf(stderr, "Failed to create Vulkan semaphore.\n");
         exit(1);
@@ -610,19 +604,48 @@ static VkSemaphore create_semaphore(VkDevice device) {
     return semaphore;
 }
 
+static VkFence create_fence(VkDevice device, char signaled) {
+    VkFenceCreateInfo createInfo = { 0 };
+    createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    createInfo.flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0;
+
+    VkFence fence = VK_NULL_HANDLE;
+    if(vkCreateFence(device, &createInfo, NULL, &fence) != VK_SUCCESS) {
+        fprintf(stderr, "Failed to create Vulkan fence.\n");
+        exit(1);
+    }
+
+    return fence;
+}
+
+static char window_run(SDL_Window *window) {
+    char running = 1;
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
+    {
+        switch (event.type)
+        {
+        case SDL_QUIT:
+            running = 0;
+            break;
+        }
+    }
+    return running;
+}
+
 int main() {
     if(volkInitialize() != VK_SUCCESS) {
         fprintf(stderr, "Failed to initialize volk.\n");
         exit(1);
     }
-    VkInstance instance = create_instance();
+    SDL_Window *window = SDL_CreateWindow("vlkTest", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_VULKAN);
+    VkInstance instance = create_instance(window);
     volkLoadInstanceOnly(instance);
 #ifdef _DEBUG
     VkDebugReportCallbackEXT clb = register_debug_callback(instance);
 #endif // _DEBUG
     VkPhysicalDevice physical_device = pick_physical_device(instance);
-    window_create();
-    VkSurfaceKHR surface = create_surface(instance);
+    VkSurfaceKHR surface = create_surface(instance, window);
     Queues queue_indices = get_queue_indices(physical_device, surface);
     VkDevice device = create_logical_device(physical_device, queue_indices);
     volkLoadDevice(device);
@@ -638,8 +661,10 @@ int main() {
     VkFramebuffer *framebuffers = create_framebuffers(device, swapchain_info);
     VkCommandPool command_pool = create_command_pool(device, queue_indices);
     VkCommandBuffer *command_buffers = create_command_buffers(device, command_pool, swapchain_info.image_count);
-    VkSemaphore image_avaliable_semaphore = create_semaphore(device);
-    VkSemaphore render_finsihed_semaphore = create_semaphore(device);
+    const int MAX_FRAMES_IN_FLIGHTS = 2;
+    VkSemaphore image_avaliable_semaphore[] = { create_semaphore(device), create_semaphore(device) };
+    VkSemaphore render_finsihed_semaphore[] = { create_semaphore(device), create_semaphore(device) };
+    VkFence in_flight_fence[] = { create_fence(device, 1), create_fence(device, 1) };
 
     for(uint32_t i = 0; i < swapchain_info.image_count; ++i) {
         VkCommandBufferBeginInfo begin_info = { 0 };
@@ -678,15 +703,18 @@ int main() {
         }
     }
 
-    while(window_run()) {
+    uint32_t current_frame = 0;
+    while(window_run(window)) {
+        vkWaitForFences(device, 1, &in_flight_fence[current_frame], VK_TRUE, UINT64_MAX);
+        vkResetFences(device, 1, &in_flight_fence[current_frame]);
+
         uint32_t image_index;
-        vkAcquireNextImageKHR(device, swapchain_info.swapchain, UINT64_MAX, image_avaliable_semaphore, VK_NULL_HANDLE, &image_index);
+        vkAcquireNextImageKHR(device, swapchain_info.swapchain, UINT64_MAX, image_avaliable_semaphore[current_frame], VK_NULL_HANDLE, &image_index);
 
         VkSubmitInfo submit_info = { 0 };
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
         
-        VkSemaphore wait_semaphore[] = { image_avaliable_semaphore };
+        VkSemaphore wait_semaphore[] = { image_avaliable_semaphore[current_frame] };
         VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
         submit_info.waitSemaphoreCount = 1;
@@ -695,11 +723,11 @@ int main() {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffers[image_index];
 
-        VkSemaphore singal_semaphores[] = { render_finsihed_semaphore };
+        VkSemaphore singal_semaphores[] = { render_finsihed_semaphore[current_frame] };
         submit_info.signalSemaphoreCount = 1;
         submit_info.pSignalSemaphores = singal_semaphores;
 
-        if(vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) { 
+        if(vkQueueSubmit(graphics_queue, 1, &submit_info, in_flight_fence[current_frame]) != VK_SUCCESS) { 
             fprintf(stderr, "Failed to submit Vulkan queue.\n");
             exit(1);
         }
@@ -712,15 +740,18 @@ int main() {
         present_info.pSwapchains = &swapchain_info.swapchain;
         present_info.pImageIndices = &image_index;
         present_info.pResults = NULL;
-
+        
         vkQueuePresentKHR(present_queue, &present_info);
 
-        //usleep(0);
+        current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHTS;
     }
     vkDeviceWaitIdle(device);
 
-    vkDestroySemaphore(device, render_finsihed_semaphore, NULL);
-    vkDestroySemaphore(device, image_avaliable_semaphore, NULL);
+    for  (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHTS; ++i) {
+        vkDestroySemaphore(device, render_finsihed_semaphore[i], NULL);
+        vkDestroySemaphore(device, image_avaliable_semaphore[i], NULL);
+        vkDestroyFence(device, in_flight_fence[i], NULL);
+    }
     vkDestroyCommandPool(device, command_pool, NULL);
     for (uint32_t i = 0; i < swapchain_info.image_count; ++i)
         vkDestroyFramebuffer(device, framebuffers[i], NULL);
@@ -738,7 +769,7 @@ int main() {
 #endif // _DEBUG
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, VK_NULL_HANDLE);
-    window_destroy();
+    SDL_DestroyWindow(window);
     vkDestroyInstance(instance, NULL);
     
     return 0;
